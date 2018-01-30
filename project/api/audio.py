@@ -10,3 +10,5 @@ class Audio:
         pass
 
 
+# pyttsx
+# speech_recognition

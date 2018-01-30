@@ -9,7 +9,7 @@ from alexnet import AlexNet
 
 class NearestNeighbor:
 
-    K = 3
+    K = 5
     neighbor_dict = {}
 
     def __init__(self):
@@ -27,9 +27,17 @@ class NearestNeighbor:
         # Initialize model
         self.model = AlexNet(self.x, self.keep_prob, num_classes, train_layers)
 
+        # Start the Tensorflow Session and initialize all variables
+        self.sess = tf.Session()
+        self.sess.run(tf.global_variables_initializer())
+
+        # Load the pre-trained weights into the non-trainable layer
+        self.model.load_initial_weights(self.sess)
+
         # Declare the feature-vector-dictionary
         self.load_neighbor_dict()
 
+    # Classifies the given picture and returns the label and if it was a new label
     def classify(self, name):
 
         nearest_neighbours = []
@@ -89,7 +97,7 @@ class NearestNeighbor:
             # add the features to the neighbor dict if it was the correct estimation
             if correct_estimation == "y" or correct_estimation == "Y":
                 self.neighbor_dict[best_match[0]] = np.concatenate((self.neighbor_dict[best_match[0]], features))
-                return
+                return best_match[0], False
 
             # ask what the correct label is
             elif correct_estimation == "n" or correct_estimation == "N":
@@ -97,7 +105,7 @@ class NearestNeighbor:
 
                 if correct_label in self.neighbor_dict.keys():
                     self.neighbor_dict[correct_label] = np.concatenate((self.neighbor_dict[correct_label], features))
-                    return
+                    return correct_label, False
 
                 # ask if it is a new label
                 else:
@@ -105,7 +113,7 @@ class NearestNeighbor:
 
                     if new_label == "y":
                         self.neighbor_dict[correct_label] = features
-                        return
+                        return correct_label, True
 
                     else:
                         print("then may check the correct spelling.")
@@ -113,6 +121,28 @@ class NearestNeighbor:
             else:
                 print("Wrong input, please check again.")
 
+    # Extracts the feature vector of the given picture and saves it in the dict
+    def learn(self, label, image_name="tmp_picture"):
+
+        image_path = "classification/pictures/" + image_name + ".jpeg"
+
+        # Get the Image
+        image = (cv2.imread(image_path)[:, :, :3]).astype(np.float32)
+        image = image - np.mean(image)
+
+        # RGB to BGR
+        image[:, :, 0], image[:, :, 2] = image[:, :, 2], image[:, :, 0]
+
+        features = self.get_features(np.array([image]))
+
+        if label not in self.neighbor_dict.keys():
+            self.neighbor_dict[label] = features
+        else:
+            self.neighbor_dict[label] = np.concatenate((self.neighbor_dict[label], features))
+
+        print("\nFeature vector of the scene is saved. \n")
+
+    # Saves all feature vectors of the pictures of the given folder with the given label
     def batch_learn(self, label, folder_path="classification/pictures/"):
 
         folder_path = folder_path + label
@@ -124,12 +154,12 @@ class NearestNeighbor:
 
                 # Get the image
                 image_path = os.path.join(folder_path, image)
-                im1 = (cv2.imread(image_path)[:, :, :3]).astype(np.float32)
-                im1 = im1 - np.mean(im1)
+                image = (cv2.imread(image_path)[:, :, :3]).astype(np.float32)
+                image = image - np.mean(image)
 
                 # RGB to BGR
-                im1[:, :, 0], im1[:, :, 2] = im1[:, :, 2], im1[:, :, 0]
-                images.append(im1)
+                image[:, :, 0], image[:, :, 2] = image[:, :, 2], image[:, :, 0]
+                images.append(image)
 
         features = self.get_features(np.array(images))
 
@@ -148,31 +178,21 @@ class NearestNeighbor:
         # Link variable to model output
         score = self.model.fc7
 
-        # Start Tensorflow session
-        with tf.Session() as sess:
+        for im in images:
 
-            # Initialize all variables
-            sess.run(tf.global_variables_initializer())
+            # Skip image if the shape is not the right one
+            if im.shape != (227, 227, 3):
+                print ("Image has wrong resolution!")
+                continue
 
-            # Load the pre-trained weights into the non-trainable layer
-            self.model.load_initial_weights(sess)
+            # Feed alexnet with the image
+            output = self.sess.run(score, feed_dict={self.x: [im], self.keep_prob: 1.})
+            features.append(output[0])
 
-            for im in images:
+        return features
 
-                # Skip image if the shape is not the right one
-                if im.shape != (227, 227, 3):
-                    print ("Image has wrong resolution!")
-                    continue
-
-                # Feed alexnet with the image
-                output = sess.run(score, feed_dict={self.x: [im], self.keep_prob: 1.})
-                features.append(output[0])
-
-            return features
-
+    # Load the neighbor list out of the file
     def load_neighbor_dict(self):
-
-        # Load the neighbor list out of the file
         try:
             print "open file"
             self.neighbor_dict = dict(pickle.load(open("classification/neighbor_list.p", "rb")))
@@ -180,10 +200,12 @@ class NearestNeighbor:
         except IOError:
             print "no file found. start with empty dictionary"
 
+    # Shows all labels of the neighbor dictionary
     def show_labels(self):
         for key in self.neighbor_dict.keys():
             print(key + ": " + str(len(self.neighbor_dict[key])) + " feature vectors")
 
+    # Deletes a label from the neighbor dict and the feature vectors of it
     def delete_label_neighbor_dict(self, label):
         if label in self.neighbor_dict.keys():
             del self.neighbor_dict[label]
@@ -193,5 +215,11 @@ class NearestNeighbor:
     def clear_neighbor_dict(self):
         self.neighbor_dict.clear()
 
-    def save_neighbor_dict(self):
+    def save_neigbor_dict(self):
         pickle.dump(self.neighbor_dict, open("classification/neighbor_list.p", "wb"))
+        print("file saved")
+
+    # Saves the neighbor dictionary and closes the tensorflow session
+    def close(self):
+        self.save_neigbor_dict()
+        self.sess.close()
